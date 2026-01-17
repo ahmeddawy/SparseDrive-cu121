@@ -1,26 +1,25 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
-import mmcv
 import os
 from os import path as osp
 
 import torch
 import warnings
-from mmcv import Config, DictAction
+from mmengine.config import Config, DictAction
+from mmengine.fileio import dump, load
 from mmcv.cnn import fuse_conv_bn
-from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
-from mmcv.runner import (
-    get_dist_info,
-    init_dist,
-    load_checkpoint,
-    wrap_fp16_model,
+from mmengine.dist import get_dist_info, init_dist
+from mmengine.runner import load_checkpoint, set_random_seed
+from mmengine.utils import mkdir_or_exist
+
+from mmdet.registry import MODELS
+from mmdet.utils import compat_cfg
+
+from projects.mmdet3d_plugin.compat import (
+    LegacyMMDataParallel,
+    LegacyMMDistributedDataParallel,
 )
-
-from mmdet.apis import single_gpu_test, multi_gpu_test, set_random_seed
-from mmdet.datasets import replace_ImageToTensor, build_dataset
-from mmdet.datasets import build_dataloader as build_dataloader_origin
-from mmdet.models import build_detector
-
+from projects.mmdet3d_plugin.datasets import custom_build_dataset
 from projects.mmdet3d_plugin.datasets.builder import build_dataloader
 from projects.mmdet3d_plugin.apis.test import custom_multi_gpu_test
 
@@ -104,7 +103,13 @@ def parse_args():
         default="none",
         help="job launcher",
     )
-    parser.add_argument("--local_rank", type=int, default=0)
+    parser.add_argument(
+        "--local_rank",
+        "--local-rank",
+        dest="local_rank",
+        type=int,
+        default=0,
+    )
     parser.add_argument("--result_file", type=str, default=None)
     parser.add_argument("--show_only", action="store_true")
     args = parser.parse_args()
@@ -142,9 +147,10 @@ def main():
     cfg = Config.fromfile(args.config)
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
+    cfg = compat_cfg(cfg)
     # import modules from string list.
     if cfg.get("custom_imports", None):
-        from mmcv.utils import import_modules_from_strings
+        from mmengine.utils import import_modules_from_strings
 
         import_modules_from_strings(**cfg["custom_imports"])
 
@@ -178,25 +184,15 @@ def main():
         torch.backends.cudnn.benchmark = True
 
     cfg.model.pretrained = None
-    # in case the test dataset is concatenated
-    samples_per_gpu = 1
+    samples_per_gpu = cfg.data.test_dataloader.get("samples_per_gpu", 1)
+    workers_per_gpu = cfg.data.test_dataloader.get(
+        "workers_per_gpu", cfg.data.get("workers_per_gpu", 4)
+    )
     if isinstance(cfg.data.test, dict):
         cfg.data.test.test_mode = True
-        samples_per_gpu = cfg.data.test.pop("samples_per_gpu", 1)
-        if samples_per_gpu > 1:
-            # Replace 'ImageToTensor' to 'DefaultFormatBundle'
-            cfg.data.test.pipeline = replace_ImageToTensor(
-                cfg.data.test.pipeline
-            )
     elif isinstance(cfg.data.test, list):
         for ds_cfg in cfg.data.test:
             ds_cfg.test_mode = True
-        samples_per_gpu = max(
-            [ds_cfg.pop("samples_per_gpu", 1) for ds_cfg in cfg.data.test]
-        )
-        if samples_per_gpu > 1:
-            for ds_cfg in cfg.data.test:
-                ds_cfg.pipeline = replace_ImageToTensor(ds_cfg.pipeline)
 
     # init distributed env first, since logger depends on the dist info.
     if args.launcher == "none":
@@ -214,38 +210,25 @@ def main():
         # use config filename as default work_dir if cfg.work_dir is None
         cfg.work_dir = osp.join('./work_dirs',
                                 osp.splitext(osp.basename(args.config))[0]) 
-    mmcv.mkdir_or_exist(osp.abspath(cfg.work_dir))
+    mkdir_or_exist(osp.abspath(cfg.work_dir))
     cfg.data.test.work_dir = cfg.work_dir
     print('work_dir: ',cfg.work_dir)
 
     # build the dataloader
-    dataset = build_dataset(cfg.data.test)
+    dataset = custom_build_dataset(cfg.data.test)
     print("distributed:", distributed)
-    if distributed:
-        data_loader = build_dataloader(
-            dataset,
-            samples_per_gpu=samples_per_gpu,
-            workers_per_gpu=cfg.data.workers_per_gpu,
-            dist=distributed,
-            shuffle=False,
-            nonshuffler_sampler=dict(type="DistributedSampler"),
-        )
-    else:
-        data_loader = build_dataloader_origin(
-            dataset,
-            samples_per_gpu=samples_per_gpu,
-            workers_per_gpu=cfg.data.workers_per_gpu,
-            dist=distributed,
-            shuffle=False,
-        )
+    data_loader = build_dataloader(
+        dataset,
+        samples_per_gpu=samples_per_gpu,
+        workers_per_gpu=workers_per_gpu,
+        dist=distributed,
+        shuffle=False,
+        nonshuffler_sampler=dict(type="DistributedSampler"),
+    )
 
     # build the model and load checkpoint
     cfg.model.train_cfg = None
-    model = build_detector(cfg.model, test_cfg=cfg.get("test_cfg"))
-    # model = build_model(cfg.model, test_cfg=cfg.get("test_cfg"))
-    fp16_cfg = cfg.get("fp16", None)
-    if fp16_cfg is not None:
-        wrap_fp16_model(model)
+    model = MODELS.build(cfg.model)
     checkpoint = load_checkpoint(model, args.checkpoint, map_location="cpu")
     if args.fuse_conv_bn:
         model = fuse_conv_bn(model)
@@ -264,12 +247,12 @@ def main():
 
     if args.result_file is not None:
         # outputs = torch.load(args.result_file)
-        outputs = mmcv.load(args.result_file)
+        outputs = load(args.result_file)
     elif not distributed:
-        model = MMDataParallel(model, device_ids=[0])
+        model = LegacyMMDataParallel(model, device_ids=[0])
         outputs = single_gpu_test(model, data_loader, args.show, args.show_dir)
     else:
-        model = MMDistributedDataParallel(
+        model = LegacyMMDistributedDataParallel(
             model.cuda(),
             device_ids=[torch.cuda.current_device()],
             broadcast_buffers=False,
@@ -282,7 +265,7 @@ def main():
     if rank == 0:
         if args.out:
             print(f"\nwriting results to {args.out}")
-            mmcv.dump(outputs, args.out)
+            dump(outputs, args.out)
         kwargs = {} if args.eval_options is None else args.eval_options
         if args.show_only:
             eval_kwargs = cfg.get("evaluation", {}).copy()
@@ -314,6 +297,8 @@ def main():
                 eval_kwargs.pop(key, None)
             eval_kwargs.update(dict(metric=args.eval, **kwargs))
             print(eval_kwargs)
+            eval_kwargs = {'eval_mode': {'with_det': True, 'with_tracking': False, 'with_map': True, 'with_motion': True, 'with_planning': True, 'tracking_threshold': 0.2, 'motion_threshhold': 0.2}, 'pipeline': None, 'metric': ['bbox']}
+
             results_dict = dataset.evaluate(outputs, **eval_kwargs)
             print(results_dict)
 

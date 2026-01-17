@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-from mmcv.utils import build_from_cfg
-from mmdet.models.builder import LOSSES
+from mmengine.registry import build_from_cfg
+from projects.mmdet3d_plugin.compat import LOSSES
 from mmdet.models.losses import l1_loss, smooth_l1_loss
 
 

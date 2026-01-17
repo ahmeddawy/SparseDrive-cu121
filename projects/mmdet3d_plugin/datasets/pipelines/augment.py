@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from numpy import random
 import mmcv
-from mmdet.datasets.builder import PIPELINES
+from mmengine.registry import TRANSFORMS as PIPELINES
 from PIL import Image
 
 

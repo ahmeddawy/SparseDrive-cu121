@@ -2,12 +2,10 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-from mmcv.cnn import Linear, Scale, bias_init_with_prob
-from mmcv.runner.base_module import Sequential, BaseModule
-from mmcv.cnn import xavier_init
-from mmcv.cnn.bricks.registry import (
-    PLUGIN_LAYERS,
-)
+from mmcv.cnn import Linear, Scale
+from mmengine.model import Sequential, BaseModule
+from mmengine.model import bias_init_with_prob, xavier_init
+from projects.mmdet3d_plugin.compat import PLUGIN_LAYERS
 
 from projects.mmdet3d_plugin.core.box3d import *
 from ..blocks import linear_relu_ln

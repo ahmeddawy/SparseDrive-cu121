@@ -1,6 +1,8 @@
 import numpy as np
 import mmcv
-from mmdet.datasets.builder import PIPELINES
+from mmengine.fileio import FileClient
+from mmengine.registry import TRANSFORMS as PIPELINES
+from mmengine.utils import check_file_exist
 
 
 @PIPELINES.register_module()
@@ -131,12 +133,12 @@ class LoadPointsFromFile(object):
             np.ndarray: An array containing point clouds data.
         """
         if self.file_client is None:
-            self.file_client = mmcv.FileClient(**self.file_client_args)
+            self.file_client = FileClient(**self.file_client_args)
         try:
             pts_bytes = self.file_client.get(pts_filename)
             points = np.frombuffer(pts_bytes, dtype=np.float32)
         except ConnectionError:
-            mmcv.check_file_exist(pts_filename)
+            check_file_exist(pts_filename)
             if pts_filename.endswith(".npy"):
                 points = np.load(pts_filename)
             else:

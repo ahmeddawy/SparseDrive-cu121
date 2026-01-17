@@ -6,11 +6,11 @@ import torch.nn as nn
 from torch.nn.functional import linear
 from torch.nn.init import xavier_uniform_, constant_
 
-from mmcv.utils import deprecated_api_warning
-from mmcv.runner import auto_fp16
-from mmcv.runner.base_module import BaseModule
+from mmengine.utils import deprecated_api_warning
+from mmengine.model import BaseModule
 from mmcv.cnn.bricks.drop import build_dropout
-from mmcv.cnn.bricks.registry import ATTENTION
+from projects.mmdet3d_plugin.compat import ATTENTION
+from projects.mmdet3d_plugin.compat import auto_fp16
 import torch.utils.checkpoint as cp
 
 
@@ -300,4 +300,3 @@ def gen_sineembed_for_position(pos_tensor, hidden_dim=256):
     pos_y = torch.stack((pos_y[..., 0::2].sin(), pos_y[..., 1::2].cos()), dim=-1).flatten(-2)
     pos = torch.cat((pos_y, pos_x), dim=-1)
     return pos
-

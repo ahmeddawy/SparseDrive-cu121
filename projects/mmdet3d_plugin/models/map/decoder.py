@@ -2,7 +2,7 @@ from typing import Optional, List
 
 import torch
 
-from mmdet.core.bbox.builder import BBOX_CODERS
+from mmdet.models.task_modules import BBOX_CODERS
 
 
 @BBOX_CODERS.register_module()

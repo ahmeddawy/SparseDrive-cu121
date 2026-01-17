@@ -6,7 +6,6 @@
 
 from .mmdet_train import custom_train_detector
 # from mmseg.apis import train_segmentor
-from mmdet.apis import train_detector
 
 
 def custom_train_model(
@@ -51,7 +50,7 @@ def train_model(
     Because we need different eval_hook in runner. Should be deprecated in the
     future.
     """
-    train_detector(
+    custom_train_detector(
         model,
         dataset,
         cfg,

@@ -5,7 +5,7 @@ import copy
 import numpy as np
 import torch
 import torch.distributed as dist
-from mmcv.runner import get_dist_info
+from mmengine.dist import get_dist_info
 from torch.utils.data.sampler import Sampler
 
 
@@ -105,6 +105,8 @@ class GroupInBatchSampler(Sampler):
         self.aug_per_local_sample = [None for _ in range(self.batch_size)]
         self.skip_prob = skip_prob
         self.sequence_flip_prob = sequence_flip_prob
+        # mmengine's DistSamplerSeedHook expects batch_sampler.sampler.
+        self.sampler = self
 
     def _infinite_group_indices(self):
         g = torch.Generator()

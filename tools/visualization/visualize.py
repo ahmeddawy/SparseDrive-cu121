@@ -7,8 +7,8 @@ import cv2
 import numpy as np
 from PIL import Image
 
-import mmcv
-from mmcv import Config
+from mmengine.fileio import load
+from mmengine.config import Config
 from mmdet.datasets import build_dataset
 
 from tools.visualization.bev_render import BEVRender
@@ -39,7 +39,7 @@ class Visualizer:
         
         cfg = Config.fromfile(args.config)
         self.dataset = build_dataset(cfg.data.val)
-        self.results = mmcv.load(args.result_path)
+        self.results = load(args.result_path)
         self.bev_render = BEVRender(plot_choices, self.out_dir)
         self.cam_render = CamRender(plot_choices, self.out_dir)
 

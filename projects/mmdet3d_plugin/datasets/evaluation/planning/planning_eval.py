@@ -4,8 +4,9 @@ import torch.nn as nn
 import numpy as np
 from shapely.geometry import Polygon
 
-from mmcv.utils import print_log
-from mmdet.datasets import build_dataset, build_dataloader
+from mmengine.logging import print_log
+from projects.mmdet3d_plugin.datasets import custom_build_dataset
+from projects.mmdet3d_plugin.datasets.builder import build_dataloader
 
 from projects.mmdet3d_plugin.datasets.utils import box3d_to_corners
 
@@ -132,11 +133,20 @@ class PlanningMetric():
 
 
 def planning_eval(results, eval_config, logger):
-    dataset = build_dataset(eval_config)
+    dataset = custom_build_dataset(eval_config)
     dataloader = build_dataloader(
             dataset, samples_per_gpu=1, workers_per_gpu=1, shuffle=False, dist=False)
+    max_len = min(len(results), len(dataset))
+    dropped = len(dataset) - max_len
+    if dropped:
+        print_log(
+            f"[info] Kept {max_len} GT samples; dropped {dropped} with no predictions.",
+            logger=logger,
+        )
     planning_metrics = PlanningMetric()
     for i, data in enumerate(tqdm(dataloader)):
+        if i >= max_len:
+            break
         sdc_planning = data['gt_ego_fut_trajs'].cumsum(dim=-2).unsqueeze(1)
         sdc_planning_mask = data['gt_ego_fut_masks'].unsqueeze(-1).repeat(1, 1, 2).unsqueeze(1)
         command = data['gt_ego_fut_cmd'].argmax(dim=-1).item()

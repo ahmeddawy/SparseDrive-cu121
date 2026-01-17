@@ -5,19 +5,20 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from mmcv.cnn.bricks.registry import (
+from mmengine.model import BaseModule
+from mmengine.registry import build_from_cfg
+from mmdet.models.task_modules import BBOX_SAMPLERS, BBOX_CODERS
+from mmdet.utils import reduce_mean
+from projects.mmdet3d_plugin.compat import (
     ATTENTION,
+    FEEDFORWARD_NETWORK,
+    HEADS,
+    LOSSES,
+    NORM_LAYERS,
     PLUGIN_LAYERS,
     POSITIONAL_ENCODING,
-    FEEDFORWARD_NETWORK,
-    NORM_LAYERS,
+    force_fp32,
 )
-from mmcv.runner import BaseModule, force_fp32
-from mmcv.utils import build_from_cfg
-from mmdet.core.bbox.builder import BBOX_SAMPLERS
-from mmdet.core.bbox.builder import BBOX_CODERS
-from mmdet.models import HEADS, LOSSES
-from mmdet.core import reduce_mean
 
 from ..blocks import DeformableFeatureAggregation as DFG
 

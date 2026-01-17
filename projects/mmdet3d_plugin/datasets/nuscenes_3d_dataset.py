@@ -16,10 +16,11 @@ from nuscenes.utils.data_classes import Box as NuScenesBox
 from nuscenes.eval.detection.config import config_factory as det_configs
 from nuscenes.eval.common.config import config_factory as track_configs
 
-import mmcv
-from mmcv.utils import print_log
-from mmdet.datasets import DATASETS
-from mmdet.datasets.pipelines import Compose
+from mmengine.fileio import dump, load
+from mmengine.utils import mkdir_or_exist, track_iter_progress
+from mmengine.dataset import Compose
+from mmengine.logging import print_log
+from mmdet.registry import DATASETS
 from .utils import (
     draw_lidar_bbox3d_on_img,
     draw_lidar_bbox3d_on_bev,
@@ -278,7 +279,7 @@ class NuScenes3DDataset(Dataset):
         return cat_ids
 
     def load_annotations(self, ann_file):
-        data = mmcv.load(ann_file, file_format="pkl")
+        data = load(ann_file, file_format="pkl")
         data_infos = list(sorted(data["infos"], key=lambda e: e["timestamp"]))
         data_infos = data_infos[:: self.load_interval]
         self.metadata = data["metadata"]
@@ -389,7 +390,7 @@ class NuScenes3DDataset(Dataset):
             gt_names=gt_names_3d,
         )
         if "instance_inds" in info:
-            instance_inds = np.array(info["instance_inds"], dtype=np.int)[mask]
+            instance_inds = np.array(info["instance_inds"], dtype=np.int32)[mask]
             anns_results["instance_inds"] = instance_inds
             
         if 'gt_agent_fut_trajs' in info:
@@ -439,7 +440,7 @@ class NuScenes3DDataset(Dataset):
         mapped_class_names = self.CLASSES
 
         print("Start to convert detection format...")
-        for sample_id, det in enumerate(mmcv.track_iter_progress(results)):
+        for sample_id, det in enumerate(track_iter_progress(results)):
             annos = []
             boxes = output_to_nusc_box(
                 det, threshold=self.tracking_threshold if tracking else None
@@ -512,10 +513,10 @@ class NuScenes3DDataset(Dataset):
             "results": nusc_annos,
         }
 
-        mmcv.mkdir_or_exist(jsonfile_prefix)
+        mkdir_or_exist(jsonfile_prefix)
         res_path = osp.join(jsonfile_prefix, "results_nusc.json")
         print("Results writes to", res_path)
-        mmcv.dump(nusc_submissions, res_path)
+        dump(nusc_submissions, res_path)
         return res_path
 
     def _evaluate_single(
@@ -532,9 +533,11 @@ class NuScenes3DDataset(Dataset):
             "v1.0-trainval": "val",
         }
         if not tracking:
-            from nuscenes.eval.detection.evaluate import NuScenesEval
+            from projects.mmdet3d_plugin.datasets.evaluation.det_eval import (
+                FilteredDetectionEval,
+            )
 
-            nusc_eval = NuScenesEval(
+            nusc_eval = FilteredDetectionEval(
                 nusc,
                 config=self.det3d_eval_configs,
                 result_path=result_path,
@@ -545,7 +548,7 @@ class NuScenes3DDataset(Dataset):
             nusc_eval.main(render_curves=False)
 
             # record metrics
-            metrics = mmcv.load(osp.join(output_dir, "metrics_summary.json"))
+            metrics = load(osp.join(output_dir, "metrics_summary.json"))
             detail = dict()
             metric_prefix = f"{result_name}_NuScenes"
             for name in self.CLASSES:
@@ -566,9 +569,11 @@ class NuScenes3DDataset(Dataset):
             detail["{}/NDS".format(metric_prefix)] = metrics["nd_score"]
             detail["{}/mAP".format(metric_prefix)] = metrics["mean_ap"]
         else:
-            from nuscenes.eval.tracking.evaluate import TrackingEval
+            from projects.mmdet3d_plugin.datasets.evaluation.tracking_eval import (
+                FilteredTrackingEval,
+            )
 
-            nusc_eval = TrackingEval(
+            nusc_eval = FilteredTrackingEval(
                 config=self.track3d_eval_configs,
                 result_path=result_path,
                 eval_set=eval_set_map[self.version],
@@ -580,7 +585,7 @@ class NuScenes3DDataset(Dataset):
             metrics = nusc_eval.main()
 
             # record metrics
-            metrics = mmcv.load(osp.join(output_dir, "metrics_summary.json"))
+            metrics = load(osp.join(output_dir, "metrics_summary.json"))
             print(metrics)
             detail = dict()
             metric_prefix = f"{result_name}_NuScenes"
@@ -673,7 +678,7 @@ class NuScenes3DDataset(Dataset):
         out_path = osp.join(prefix, 'submission_vector.json')
         print(f'saving submissions results to {out_path}')
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        mmcv.dump(submissions, out_path)
+        dump(submissions, out_path)
         return out_path
 
     def format_motion_results(self, results, jsonfile_prefix=None, tracking=False, thresh=None):
@@ -681,7 +686,7 @@ class NuScenes3DDataset(Dataset):
         mapped_class_names = self.CLASSES
 
         print("Start to convert detection format...")
-        for sample_id, det in enumerate(mmcv.track_iter_progress(results)):
+        for sample_id, det in enumerate(track_iter_progress(results)):
             annos = []
             boxes = output_to_nusc_box(
                 det['img_bbox'], threshold=None
@@ -830,7 +835,7 @@ class NuScenes3DDataset(Dataset):
         res_path = "results.pkl" if "trainval" in self.version else "results_mini.pkl"
         res_path = osp.join(self.work_dir, res_path)
         print('All Results write to', res_path)
-        mmcv.dump(results, res_path)
+        dump(results, res_path)
 
         results_dict = dict()
         if eval_mode['with_det']:

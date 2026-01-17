@@ -7,20 +7,21 @@ print(sys.executable, os.path.abspath(__file__))
 # import init_paths # for conda pkgs submitting method
 import argparse
 import copy
-import mmcv
 import time
 import torch
 import warnings
-from mmcv import Config, DictAction
-from mmcv.runner import get_dist_info, init_dist
+from mmengine.config import Config, DictAction
+from mmengine.utils import mkdir_or_exist
+from mmengine.dist import get_dist_info, init_dist
 from os import path as osp
 
 from mmdet import __version__ as mmdet_version
-from mmdet.apis import train_detector
-from mmdet.datasets import build_dataset
-from mmdet.models import build_detector
-from mmdet.utils import collect_env, get_root_logger
-from mmdet.apis import set_random_seed
+from mmdet.registry import MODELS
+from mmengine.logging import MMLogger
+from mmdet.utils import collect_env
+from mmengine.runner import set_random_seed
+from projects.mmdet3d_plugin.datasets import custom_build_dataset
+from projects.mmdet3d_plugin.apis.train import custom_train_model
 from torch import distributed as dist
 from datetime import timedelta
 
@@ -93,7 +94,13 @@ def parse_args():
         default="none",
         help="job launcher",
     )
-    parser.add_argument("--local_rank", type=int, default=0)
+    parser.add_argument(
+        "--local_rank",
+        "--local-rank",
+        dest="local_rank",
+        type=int,
+        default=0,
+    )
     parser.add_argument(
         "--autoscale-lr",
         action="store_true",
@@ -123,7 +130,7 @@ def main():
         cfg.merge_from_dict(args.cfg_options)
     # import modules from string list.
     if cfg.get("custom_imports", None):
-        from mmcv.utils import import_modules_from_strings
+        from mmengine.utils import import_modules_from_strings
 
         import_modules_from_strings(**cfg["custom_imports"])
 
@@ -212,14 +219,15 @@ def main():
     else:
         distributed = True
         init_dist(
-            args.launcher, timeout=timedelta(seconds=3600), **cfg.dist_params
+            args.launcher, timeout=3600, **cfg.dist_params
         )
         # re-set gpu_ids with distributed training mode
         _, world_size = get_dist_info()
         cfg.gpu_ids = range(world_size)
+    cfg.launcher = args.launcher
 
     # create work_dir
-    mmcv.mkdir_or_exist(osp.abspath(cfg.work_dir))
+    mkdir_or_exist(osp.abspath(cfg.work_dir))
     # dump config
     cfg.dump(osp.join(cfg.work_dir, osp.basename(args.config)))
     # init the logger before other steps
@@ -228,8 +236,10 @@ def main():
     # specify logger name, if we still use 'mmdet', the output info will be
     # filtered and won't be saved in the log_file
     # TODO: ugly workaround to judge whether we are training det or seg model
-    logger = get_root_logger(
-        log_file=log_file, log_level=cfg.log_level
+    logger = MMLogger.get_instance(
+        "sparsedrive",
+        log_file=log_file,
+        log_level=cfg.log_level,
     )
 
     # init the meta dict to record some important information such as
@@ -257,18 +267,17 @@ def main():
         )
         set_random_seed(args.seed, deterministic=args.deterministic)
     cfg.seed = args.seed
+    cfg.deterministic = args.deterministic
     meta["seed"] = args.seed
     meta["exp_name"] = osp.basename(args.config)
 
-    model = build_detector(
-        cfg.model, train_cfg=cfg.get("train_cfg"), test_cfg=cfg.get("test_cfg")
-    )
+    model = MODELS.build(cfg.model)
     model.init_weights()
     logger.info(f"Model:\n{model}")
 
     cfg.data.train.work_dir = cfg.work_dir
     cfg.data.val.work_dir = cfg.work_dir
-    datasets = [build_dataset(cfg.data.train)]
+    datasets = [custom_build_dataset(cfg.data.train)]
 
     if len(cfg.workflow) == 2:
         val_dataset = copy.deepcopy(cfg.data.val)
@@ -281,7 +290,7 @@ def main():
         # which do not affect AP/AR calculation later
         # refer to https://mmdetection3d.readthedocs.io/en/latest/tutorials/customize_runtime.html#customize-workflow  # noqa
         val_dataset.test_mode = False
-        datasets.append(build_dataset(val_dataset))
+        datasets.append(custom_build_dataset(val_dataset))
     if cfg.checkpoint_config is not None:
         # save mmdet version, config file content and class names in
         # checkpoints as meta data
@@ -292,26 +301,15 @@ def main():
         )
     # add an attribute for visualization convenience
     model.CLASSES = datasets[0].CLASSES
-    if hasattr(cfg, "plugin"):
-        custom_train_model(
-            model,
-            datasets,
-            cfg,
-            distributed=distributed,
-            validate=(not args.no_validate),
-            timestamp=timestamp,
-            meta=meta,
-        )
-    else:
-        train_detector(
-            model,
-            datasets,
-            cfg,
-            distributed=distributed,
-            validate=(not args.no_validate),
-            timestamp=timestamp,
-            meta=meta,
-        )
+    custom_train_model(
+        model,
+        datasets,
+        cfg,
+        distributed=distributed,
+        validate=(not args.no_validate),
+        timestamp=timestamp,
+        meta=meta,
+    )
 
 
 if __name__ == "__main__":

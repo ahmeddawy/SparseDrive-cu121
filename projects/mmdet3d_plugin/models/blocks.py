@@ -6,15 +6,15 @@ import torch.nn as nn
 from torch.cuda.amp.autocast_mode import autocast
 
 from mmcv.cnn import Linear, build_activation_layer, build_norm_layer
-from mmcv.runner.base_module import Sequential, BaseModule
+from mmengine.model import Sequential, BaseModule
 from mmcv.cnn.bricks.transformer import FFN
-from mmcv.utils import build_from_cfg
+from mmengine.registry import build_from_cfg
 from mmcv.cnn.bricks.drop import build_dropout
-from mmcv.cnn import xavier_init, constant_init
-from mmcv.cnn.bricks.registry import (
+from mmengine.model import constant_init, xavier_init
+from projects.mmdet3d_plugin.compat import (
     ATTENTION,
-    PLUGIN_LAYERS,
     FEEDFORWARD_NETWORK,
+    PLUGIN_LAYERS,
 )
 
 try:

@@ -3,7 +3,7 @@ from typing import Optional
 import numpy as np
 import torch
 
-from mmdet.core.bbox.builder import BBOX_CODERS
+from mmdet.models.task_modules import BBOX_CODERS
 
 from projects.mmdet3d_plugin.core.box3d import *
 from projects.mmdet3d_plugin.models.detection3d.decoder import *

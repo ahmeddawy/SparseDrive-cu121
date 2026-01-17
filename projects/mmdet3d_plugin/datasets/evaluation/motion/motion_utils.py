@@ -7,7 +7,7 @@ import os
 import random
 import time
 import tqdm
-from typing import Tuple, Dict, Any, Callable
+from typing import Tuple, Dict, Any, Callable,Iterable,  List, Optional
 
 import numpy as np
 
@@ -205,13 +205,16 @@ def load_gt(nusc: NuScenes, eval_split: str, box_cls, verbose: bool = False, sec
             'Error: You are trying to evaluate on the test set but you do not have the annotations!'
 
     sample_tokens = []
+    scene_ok_cache = {}
     for sample_token in sample_tokens_all:
         scene_token = nusc.get('sample', sample_token)['scene_token']
         scene_record = nusc.get('scene', scene_token)
+
         if scene_record['name'] in splits[eval_split]:
             sample_tokens.append(sample_token)
 
     all_annotations = EvalBoxes()
+    print("Loading ground truth annotations for FILTERED {} samples...".format(len(sample_tokens)))
 
     # Load annotations and filter predictions and annotations.
     tracking_id_set = set()

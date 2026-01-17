@@ -3,8 +3,8 @@ from torch import nn
 import torch.nn.functional as F
 import numpy as np
 
-from mmcv.utils import build_from_cfg
-from mmcv.cnn.bricks.registry import PLUGIN_LAYERS
+from mmengine.registry import build_from_cfg
+from projects.mmdet3d_plugin.compat import PLUGIN_LAYERS
 
 __all__ = ["InstanceBank"]
 

@@ -4,12 +4,12 @@ import random
 from functools import partial
 
 import numpy as np
-from mmcv.parallel import collate
-from mmcv.runner import get_dist_info
-from mmcv.utils import Registry, build_from_cfg
+from mmengine.dist import get_dist_info
+from mmengine.dataset import ClassBalancedDataset, ConcatDataset, RepeatDataset
+from mmengine.registry import Registry, build_from_cfg
 from torch.utils.data import DataLoader
 
-from mmdet.datasets.samplers import GroupSampler
+from projects.mmdet3d_plugin.compat import collate
 from projects.mmdet3d_plugin.datasets.samplers import (
     GroupInBatchSampler,
     DistributedGroupSampler,
@@ -98,7 +98,17 @@ def build_dataloader(
     else:
         # assert False, 'not support in bevformer'
         print("WARNING!!!!, Only can be used for obtain inference speed!!!!")
-        sampler = GroupSampler(dataset, samples_per_gpu) if shuffle else None
+        sampler = (
+            DistributedGroupSampler(
+                dataset,
+                samples_per_gpu=samples_per_gpu,
+                num_replicas=1,
+                rank=0,
+                seed=seed,
+            )
+            if shuffle
+            else None
+        )
         batch_size = num_gpus * samples_per_gpu
         num_workers = num_gpus * workers_per_gpu
 
@@ -132,11 +142,7 @@ def worker_init_fn(worker_id, num_workers, rank, seed):
 
 
 # Copyright (c) OpenMMLab. All rights reserved.
-import platform
-from mmcv.utils import Registry, build_from_cfg
-
-from mmdet.datasets import DATASETS
-from mmdet.datasets.builder import _concat_dataset
+from mmdet.registry import DATASETS
 
 if platform.system() != "Windows":
     # https://github.com/pytorch/pytorch/issues/973
@@ -156,11 +162,6 @@ def custom_build_dataset(cfg, default_args=None):
         from mmdet3d.datasets.dataset_wrappers import CBGSDataset
     except:
         CBGSDataset = None
-    from mmdet.datasets.dataset_wrappers import (
-        ClassBalancedDataset,
-        ConcatDataset,
-        RepeatDataset,
-    )
 
     if isinstance(cfg, (list, tuple)):
         dataset = ConcatDataset(
@@ -169,7 +170,8 @@ def custom_build_dataset(cfg, default_args=None):
     elif cfg["type"] == "ConcatDataset":
         dataset = ConcatDataset(
             [custom_build_dataset(c, default_args) for c in cfg["datasets"]],
-            cfg.get("separate_eval", True),
+            lazy_init=cfg.get("lazy_init", False),
+            ignore_keys=cfg.get("ignore_keys", None),
         )
     elif cfg["type"] == "RepeatDataset":
         dataset = RepeatDataset(
@@ -185,7 +187,16 @@ def custom_build_dataset(cfg, default_args=None):
             custom_build_dataset(cfg["dataset"], default_args)
         )
     elif isinstance(cfg.get("ann_file"), (list, tuple)):
-        dataset = _concat_dataset(cfg, default_args)
+        datasets = []
+        for ann_file in cfg.get("ann_file"):
+            data_cfg = copy.deepcopy(cfg)
+            data_cfg["ann_file"] = ann_file
+            datasets.append(custom_build_dataset(data_cfg, default_args))
+        dataset = ConcatDataset(
+            datasets,
+            lazy_init=cfg.get("lazy_init", False),
+            ignore_keys=cfg.get("ignore_keys", None),
+        )
     else:
         dataset = build_from_cfg(cfg, DATASETS, default_args)
 

@@ -3,7 +3,7 @@ import numpy as np
 import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 
-from mmdet.core.bbox.builder import BBOX_SAMPLERS
+from mmdet.models.task_modules import BBOX_SAMPLERS
 
 from projects.mmdet3d_plugin.core.box3d import *
 from ..base_target import BaseTargetWithDenoising

@@ -1,6 +1,6 @@
 import torch
 
-from mmdet.core.bbox.builder import BBOX_SAMPLERS
+from mmdet.models.task_modules import BBOX_SAMPLERS
 
 __all__ = ["MotionTarget", "PlanningTarget"]
 
@@ -104,5 +104,4 @@ class PlanningTarget():
         best_reg = get_best_reg(reg_pred, gt_reg_target, gt_reg_mask)
 
         return cls_pred, cls_target, cls_weight, best_reg, gt_reg_target, gt_reg_mask
-
 

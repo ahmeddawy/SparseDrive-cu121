@@ -2,15 +2,16 @@ from inspect import signature
 
 import torch
 
-from mmcv.runner import force_fp32, auto_fp16
-from mmcv.utils import build_from_cfg
-from mmcv.cnn.bricks.registry import PLUGIN_LAYERS
-from mmdet.models import (
+from mmengine.registry import build_from_cfg
+from mmdet.models import BaseDetector
+from projects.mmdet3d_plugin.compat import (
     DETECTORS,
-    BaseDetector,
+    PLUGIN_LAYERS,
+    auto_fp16,
     build_backbone,
     build_head,
     build_neck,
+    force_fp32,
 )
 from .grid_mask import GridMask
 
@@ -58,6 +59,16 @@ class SparseDrive(BaseDetector):
                 True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7
             ) 
 
+    def _split_inputs(self, batch_inputs, batch_data_samples):
+        if isinstance(batch_inputs, dict):
+            data = dict(batch_inputs)
+            img = data.pop("img")
+            return img, data
+        data = {}
+        if isinstance(batch_data_samples, dict):
+            data = dict(batch_data_samples)
+        return batch_inputs, data
+
     @auto_fp16(apply_to=("img",), out_fp32=True)
     def extract_feat(self, img, return_depth=False, metas=None):
         bs = img.shape[0]
@@ -87,6 +98,19 @@ class SparseDrive(BaseDetector):
         if return_depth:
             return feature_maps, depths
         return feature_maps
+
+    def _forward(self, batch_inputs, batch_data_samples=None):
+        img, data = self._split_inputs(batch_inputs, batch_data_samples)
+        feature_maps = self.extract_feat(img, metas=data)
+        return self.head(feature_maps, data)
+
+    def loss(self, batch_inputs, batch_data_samples):
+        img, data = self._split_inputs(batch_inputs, batch_data_samples)
+        return self.forward_train(img, **data)
+
+    def predict(self, batch_inputs, batch_data_samples):
+        img, data = self._split_inputs(batch_inputs, batch_data_samples)
+        return self.simple_test(img, **data)
 
     @force_fp32(apply_to=("img",))
     def forward(self, img, **data):

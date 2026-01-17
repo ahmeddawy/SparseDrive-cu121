@@ -4,8 +4,8 @@ import numpy as np
 from shapely.geometry import LineString
 from numpy.typing import NDArray
 
-from mmcv.parallel import DataContainer as DC
-from mmdet.datasets.builder import PIPELINES
+from projects.mmdet3d_plugin.compat import DataContainer as DC
+from mmengine.registry import TRANSFORMS as PIPELINES
 
 
 @PIPELINES.register_module(force=True)

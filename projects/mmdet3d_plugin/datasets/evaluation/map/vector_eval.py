@@ -10,9 +10,11 @@ import numpy as np
 from numpy.typing import NDArray
 from shapely.geometry import LineString
 
-import mmcv
-from mmcv import Config
-from mmdet.datasets import build_dataset, build_dataloader
+from mmengine.fileio import load
+from mmengine.utils import ProgressBar
+from mmengine.config import Config
+from projects.mmdet3d_plugin.datasets import custom_build_dataset
+from projects.mmdet3d_plugin.datasets.builder import build_dataloader
 
 from .AP import instance_match, average_precision
 
@@ -29,23 +31,30 @@ class VectorEvaluate(object):
     """
 
     def __init__(self, dataset_cfg: Config, n_workers: int=N_WORKERS) -> None:
-        self.dataset = build_dataset(dataset_cfg)
+        self.dataset = custom_build_dataset(dataset_cfg)
         self.dataloader = build_dataloader(
             self.dataset, samples_per_gpu=1, workers_per_gpu=n_workers, shuffle=False, dist=False)
         classes = self.dataset.MAP_CLASSES
         self.cat2id = {cls: i for i, cls in enumerate(classes)}
         self.id2cat = {v: k for k, v in self.cat2id.items()}
-        self.n_workers = n_workers
+        self.n_workers = 0 #n_workers
         self.thresholds = [0.5, 1.0, 1.5]
         
     @cached_property
     def gts(self) -> Dict[str, Dict[int, List[NDArray]]]:
         print('collecting gts...')
         gts = {}
-        pbar = mmcv.ProgressBar(len(self.dataloader))
+        pbar = ProgressBar(len(self.dataloader))
         for data in self.dataloader:
-            token = deepcopy(data['img_metas'].data[0][0]['token'])
-            gt = deepcopy(data['vectors'].data[0][0])
+            meta = data['img_metas'].data
+            while isinstance(meta, (list, tuple)) and meta:
+                meta = meta[0]
+            token = deepcopy(meta['token'])
+
+            vectors = data['vectors'].data
+            while isinstance(vectors, (list, tuple)) and vectors:
+                vectors = vectors[0]
+            gt = deepcopy(vectors)
             gts[token] = gt
             pbar.update()
             del data # avoid dataloader memory crash
@@ -158,8 +167,21 @@ class VectorEvaluate(object):
         Returns:
             new_result_dict (Dict): evaluation results. AP by categories.
         '''
-        results = mmcv.load(result_path)
+        results = load(result_path)
         results = results['results']
+        pred_tokens = set(results.keys())
+        if pred_tokens:
+            filtered_gts = {
+                token: gt for token, gt in self.gts.items() if token in pred_tokens
+            }
+            dropped = len(self.gts) - len(filtered_gts)
+            if dropped:
+                print(
+                    f"[info] Kept {len(filtered_gts)} GT samples; dropped {dropped} with no predictions."
+                )
+            gts = filtered_gts
+        else:
+            gts = {}
         
         # re-group samples and gt by label
         samples_by_cls = {label: [] for label in self.id2cat.keys()}
@@ -167,7 +189,7 @@ class VectorEvaluate(object):
         num_preds = {label: 0 for label in self.id2cat.keys()}
 
         # align by token
-        for token, gt in self.gts.items():
+        for token, gt in gts.items():
             if token in results.keys():
                 pred = results[token]
             else:
@@ -200,7 +222,7 @@ class VectorEvaluate(object):
             pool = Pool(self.n_workers)
         
         sum_mAP = 0
-        pbar = mmcv.ProgressBar(len(self.id2cat))
+        pbar = ProgressBar(len(self.id2cat))
         for label in self.id2cat.keys():
             samples = samples_by_cls[label] # List[(pred_lines, scores, gts)]
             result_dict[self.id2cat[label]] = {
@@ -261,7 +283,7 @@ class VectorEvaluate(object):
                 round(result_dict[self.id2cat[label]]['AP'], 4),
             ])
         
-        from mmcv.utils import print_log
+        from mmengine.logging import print_log
         print_log('\n'+str(table), logger=logger)
         mAP_normal = 0
         for label in self.id2cat.keys():

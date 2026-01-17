@@ -9,16 +9,17 @@ import shutil
 import tempfile
 import time
 
-import mmcv
 import torch
 import torch.distributed as dist
 from mmcv.image import tensor2imgs
-from mmcv.runner import get_dist_info
+from mmengine.dist import get_dist_info
+from mmengine.fileio import dump, load
+from mmengine.utils import ProgressBar, mkdir_or_exist
 
-from mmdet.core import encode_mask_results
+from mmdet.structures.mask.utils import encode_mask_results
 
+from projects.mmdet3d_plugin.compat import scatter
 
-import mmcv
 import numpy as np
 import pycocotools.mask as mask_util
 
@@ -68,10 +69,12 @@ def custom_multi_gpu_test(model, data_loader, tmpdir=None, gpu_collect=False):
     dataset = data_loader.dataset
     rank, world_size = get_dist_info()
     if rank == 0:
-        prog_bar = mmcv.ProgressBar(len(dataset))
+        prog_bar = ProgressBar(len(dataset))
     time.sleep(2)  # This line can prevent deadlock problem in some cases.
     have_mask = False
     for i, data in enumerate(data_loader):
+        device = next(model.parameters()).device
+        data = scatter(data, [device])[0]
         with torch.no_grad():
             result = model(return_loss=False, rescale=True, **data)
             # encode mask results
@@ -129,7 +132,7 @@ def collect_results_cpu(result_part, size, tmpdir=None):
             (MAX_LEN,), 32, dtype=torch.uint8, device="cuda"
         )
         if rank == 0:
-            mmcv.mkdir_or_exist(".dist_test")
+            mkdir_or_exist(".dist_test")
             tmpdir = tempfile.mkdtemp(dir=".dist_test")
             tmpdir = torch.tensor(
                 bytearray(tmpdir.encode()), dtype=torch.uint8, device="cuda"
@@ -138,9 +141,9 @@ def collect_results_cpu(result_part, size, tmpdir=None):
         dist.broadcast(dir_tensor, 0)
         tmpdir = dir_tensor.cpu().numpy().tobytes().decode().rstrip()
     else:
-        mmcv.mkdir_or_exist(tmpdir)
+        mkdir_or_exist(tmpdir)
     # dump the part result to the dir
-    mmcv.dump(result_part, osp.join(tmpdir, f"part_{rank}.pkl"))
+    dump(result_part, osp.join(tmpdir, f"part_{rank}.pkl"))
     dist.barrier()
     # collect all parts
     if rank != 0:
@@ -150,7 +153,7 @@ def collect_results_cpu(result_part, size, tmpdir=None):
         part_list = []
         for i in range(world_size):
             part_file = osp.join(tmpdir, f"part_{i}.pkl")
-            part_list.append(mmcv.load(part_file))
+            part_list.append(load(part_file))
         # sort the results
         ordered_results = []
         """

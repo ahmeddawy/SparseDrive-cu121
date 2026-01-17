@@ -7,20 +7,22 @@ import cv2
 import torch
 import torch.nn as nn
 
-from mmcv.utils import build_from_cfg
-from mmcv.cnn import Linear, bias_init_with_prob
-from mmcv.runner import BaseModule, force_fp32
-from mmcv.cnn.bricks.registry import (
+from mmengine.registry import build_from_cfg
+from mmcv.cnn import Linear
+from mmengine.model import BaseModule
+from mmengine.model import bias_init_with_prob
+from mmdet.models.task_modules import BBOX_SAMPLERS, BBOX_CODERS
+from mmdet.utils import reduce_mean
+from projects.mmdet3d_plugin.compat import (
     ATTENTION,
+    FEEDFORWARD_NETWORK,
+    HEADS,
+    NORM_LAYERS,
     PLUGIN_LAYERS,
     POSITIONAL_ENCODING,
-    FEEDFORWARD_NETWORK,
-    NORM_LAYERS,
+    build_loss,
+    force_fp32,
 )
-from mmdet.core import reduce_mean
-from mmdet.models import HEADS
-from mmdet.core.bbox.builder import BBOX_SAMPLERS, BBOX_CODERS
-from mmdet.models import build_loss
 
 from projects.mmdet3d_plugin.datasets.utils import box3d_to_corners
 from projects.mmdet3d_plugin.core.box3d import *

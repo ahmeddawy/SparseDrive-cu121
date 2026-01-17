@@ -1,8 +1,8 @@
 import numpy as np
 import mmcv
-from mmcv.parallel import DataContainer as DC
-from mmdet.datasets.builder import PIPELINES
-from mmdet.datasets.pipelines import to_tensor
+from projects.mmdet3d_plugin.compat import DataContainer as DC
+from mmengine.registry import TRANSFORMS as PIPELINES
+from mmcv.transforms import to_tensor
 
 
 @PIPELINES.register_module()

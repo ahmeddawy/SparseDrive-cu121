@@ -1,6 +1,7 @@
 import torch
-from mmdet.core.bbox.match_costs.builder import MATCH_COST
-from mmdet.core.bbox.match_costs import build_match_cost
+from mmengine.structures import InstanceData
+from mmdet.models.task_modules import MATCH_COSTS as MATCH_COST
+from mmdet.models.task_modules import build_match_cost
 from torch.nn.functional import smooth_l1_loss
 
 
@@ -71,9 +72,15 @@ class MapQueriesCost(object):
             self.iou_cost = build_match_cost(iou_cost)
 
     def __call__(self, preds: dict, gts: dict, ignore_cls_cost: bool):
-
-        # classification and bboxcost.
-        cls_cost = self.cls_cost(preds['scores'], gts['labels'])
+        # classification and bbox cost.
+        cls_cost = 0
+        if not ignore_cls_cost:
+            try:
+                pred_instances = InstanceData(scores=preds['scores'])
+                gt_instances = InstanceData(labels=gts['labels'])
+                cls_cost = self.cls_cost(pred_instances, gt_instances)
+            except Exception:
+                cls_cost = self.cls_cost(preds['scores'], gts['labels'])
 
         # regression cost
         regkwargs = {}

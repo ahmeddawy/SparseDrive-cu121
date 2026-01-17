@@ -2,16 +2,15 @@
 import argparse
 import time
 import torch
-from mmcv import Config
-from mmcv.parallel import MMDataParallel
-from mmcv.runner import load_checkpoint, wrap_fp16_model
+from mmengine.config import Config
+from mmengine.runner import load_checkpoint
 import sys
 sys.path.append('.')
 from projects.mmdet3d_plugin.datasets.builder import build_dataloader
 from projects.mmdet3d_plugin.datasets import custom_build_dataset
 from mmdet.models import build_detector
 from mmcv.cnn.utils.flops_counter import add_flops_counting_methods
-from mmcv.parallel import scatter
+from projects.mmdet3d_plugin.compat import MMDataParallel, scatter, wrap_fp16_model
 
 
 def parse_args():

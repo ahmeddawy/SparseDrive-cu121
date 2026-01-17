@@ -1,5 +1,5 @@
 # ================ base config ===================
-version = 'mini'
+# version = 'mini'
 version = 'trainval'
 length = {'trainval': 28130, 'mini': 323}
 
@@ -9,12 +9,12 @@ dist_params = dict(backend="nccl")
 log_level = "INFO"
 work_dir = None
 
-total_batch_size = 48
-num_gpus = 8
+total_batch_size = 4
+num_gpus = 1
 batch_size = total_batch_size // num_gpus
 num_iters_per_epoch = int(length[version] // (num_gpus * batch_size))
 num_epochs = 10
-checkpoint_epoch_interval = 10
+checkpoint_epoch_interval = 5
 
 checkpoint_config = dict(
     interval=num_iters_per_epoch * checkpoint_epoch_interval
@@ -682,22 +682,28 @@ data = dict(
 # ================== training ========================
 optimizer = dict(
     type="AdamW",
-    lr=3e-4,
-    weight_decay=0.001,
+    lr=2e-5,  # Further reduced from 5e-5
+    weight_decay=0.01,
     paramwise_cfg=dict(
         custom_keys={
-            "img_backbone": dict(lr_mult=0.1),
-        }
-    ),
+            "img_backbone": dict(lr_mult=0.05),  # More conservative
+            "head.motion_plan_head": dict(lr_mult=0.08),  # More conservative
+            "head.det_head": dict(lr_mult=0.1),  # More conservative
+            "head.map_head": dict(lr_mult=0.1)
+        }),
 )
-optimizer_config = dict(grad_clip=dict(max_norm=25, norm_type=2))
+
 lr_config = dict(
-    policy="CosineAnnealing",
-    warmup="linear",
-    warmup_iters=500,
-    warmup_ratio=1.0 / 3,
-    min_lr_ratio=1e-3,
+    policy='CosineAnnealing',  # Changed from OneCycleLR to CosineAnnealing
+    warmup='linear',           # Linear warmup
+    warmup_iters=num_iters_per_epoch * 2,  # Warmup for 2 epochs
+    warmup_ratio=0.001,        # Start from small learning rate
+    min_lr=1e-7,              # Minimum learning rate at the end
 )
+optimizer_config = dict(
+    grad_clip=dict(max_norm=5.0, norm_type=2),  # Keep your gradient clipping
+)
+
 runner = dict(
     type="IterBasedRunner",
     max_iters=num_iters_per_epoch * num_epochs,

@@ -5,9 +5,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from mmcv.runner import BaseModule
-from mmdet.models import HEADS
-from mmdet.models import build_head
+from mmengine.model import BaseModule
+from projects.mmdet3d_plugin.compat import HEADS, build_head
 
 
 @HEADS.register_module()

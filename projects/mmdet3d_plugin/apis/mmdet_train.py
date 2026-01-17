@@ -3,36 +3,77 @@
 # ---------------------------------------------
 #  Modified by Zhiqi Li
 # ---------------------------------------------
-import random
-import warnings
-
-import numpy as np
-import torch
-import torch.distributed as dist
-from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
-from mmcv.runner import (
-    HOOKS,
-    DistSamplerSeedHook,
-    EpochBasedRunner,
-    Fp16OptimizerHook,
-    OptimizerHook,
-    build_optimizer,
-    build_runner,
-    get_dist_info,
-)
-from mmcv.utils import build_from_cfg
-
-from mmdet.core import EvalHook
-
-from mmdet.datasets import build_dataset, replace_ImageToTensor
-from mmdet.utils import get_root_logger
 import time
 import os.path as osp
-from projects.mmdet3d_plugin.datasets.builder import build_dataloader
-from projects.mmdet3d_plugin.core.evaluation.eval_hooks import (
-    CustomDistEvalHook,
+
+import torch
+from mmengine.runner import Runner, set_random_seed
+
+from mmdet.utils import compat_cfg
+
+from projects.mmdet3d_plugin.compat import (
+    LegacyMMDataParallel,
+    LegacyMMDistributedDataParallel,
 )
+from projects.mmdet3d_plugin.core.evaluation.eval_hooks import CustomEvalHook
+from projects.mmdet3d_plugin.datasets.builder import build_dataloader
 from projects.mmdet3d_plugin.datasets import custom_build_dataset
+
+
+def _build_optim_wrapper(cfg):
+    optimizer_cfg = cfg.optimizer.copy()
+    paramwise_cfg = optimizer_cfg.pop("paramwise_cfg", None)
+    if paramwise_cfg is not None:
+        optim_wrapper = dict(
+            type="OptimWrapperConstructor",
+            optimizer=optimizer_cfg,
+            paramwise_cfg=paramwise_cfg,
+        )
+    else:
+        optim_wrapper = dict(optimizer=optimizer_cfg)
+    optimizer_config = cfg.get("optimizer_config", {})
+    if optimizer_config and optimizer_config.get("grad_clip") is not None:
+        optim_wrapper["clip_grad"] = optimizer_config["grad_clip"]
+
+    fp16_cfg = cfg.get("fp16", None)
+    if fp16_cfg is not None:
+        optim_wrapper["type"] = "AmpOptimWrapper"
+        optim_wrapper["loss_scale"] = fp16_cfg.get("loss_scale", "dynamic")
+    return optim_wrapper
+
+
+def _build_param_scheduler(cfg, max_iters, by_epoch):
+    lr_cfg = cfg.get("lr_config", None)
+    if lr_cfg is None:
+        return None
+    if lr_cfg.get("policy") != "CosineAnnealing":
+        raise ValueError(f'Unsupported lr_config policy {lr_cfg.get("policy")}')
+    warmup_iters = lr_cfg.get("warmup_iters", 0)
+    warmup_ratio = lr_cfg.get("warmup_ratio", 1.0)
+    min_lr_ratio = lr_cfg.get("min_lr_ratio", 0.0)
+    schedulers = []
+    if warmup_iters > 0:
+        schedulers.append(
+            dict(
+                type="LinearLR",
+                start_factor=warmup_ratio,
+                end_factor=1.0,
+                by_epoch=by_epoch,
+                begin=0,
+                end=warmup_iters,
+            )
+        )
+    schedulers.append(
+        dict(
+            type="CosineAnnealingLR",
+            T_max=max_iters - warmup_iters,
+            by_epoch=by_epoch,
+            begin=warmup_iters,
+            end=max_iters,
+            eta_min_ratio=min_lr_ratio,
+        )
+    )
+    return schedulers
 
 
 def custom_train_detector(
@@ -44,176 +85,124 @@ def custom_train_detector(
     timestamp=None,
     meta=None,
 ):
-    logger = get_root_logger(cfg.log_level)
-
-    # prepare data loaders
+    cfg = compat_cfg(cfg)
 
     dataset = dataset if isinstance(dataset, (list, tuple)) else [dataset]
-    # assert len(dataset)==1s
-    if "imgs_per_gpu" in cfg.data:
-        logger.warning(
-            '"imgs_per_gpu" is deprecated in MMDet V2.0. '
-            'Please use "samples_per_gpu" instead'
-        )
-        if "samples_per_gpu" in cfg.data:
-            logger.warning(
-                f'Got "imgs_per_gpu"={cfg.data.imgs_per_gpu} and '
-                f'"samples_per_gpu"={cfg.data.samples_per_gpu}, "imgs_per_gpu"'
-                f"={cfg.data.imgs_per_gpu} is used in this experiments"
-            )
-        else:
-            logger.warning(
-                'Automatically set "samples_per_gpu"="imgs_per_gpu"='
-                f"{cfg.data.imgs_per_gpu} in this experiments"
-            )
-        cfg.data.samples_per_gpu = cfg.data.imgs_per_gpu
-
-    if "runner" in cfg:
-        runner_type = cfg.runner["type"]
+    runner_type = cfg.runner["type"] if "runner" in cfg else "EpochBasedRunner"
+    if runner_type == "IterBasedRunner":
+        by_epoch = False
+        train_cfg = dict(type="IterBasedTrainLoop", max_iters=cfg.runner.max_iters)
+        max_iters = cfg.runner.max_iters
     else:
-        runner_type = "EpochBasedRunner"
+        by_epoch = True
+        train_cfg = dict(type="EpochBasedTrainLoop", max_epochs=cfg.runner.max_epochs)
+        max_iters = cfg.runner.max_epochs
+
+    samples_per_gpu = cfg.data.train_dataloader.get(
+        "samples_per_gpu", cfg.data.get("samples_per_gpu", 1)
+    )
+    workers_per_gpu = cfg.data.train_dataloader.get(
+        "workers_per_gpu", cfg.data.get("workers_per_gpu", 4)
+    )
     data_loaders = [
         build_dataloader(
             ds,
-            cfg.data.samples_per_gpu,
-            cfg.data.workers_per_gpu,
-            # cfg.gpus will be ignored if distributed
+            samples_per_gpu,
+            workers_per_gpu,
             len(cfg.gpu_ids),
             dist=distributed,
             seed=cfg.seed,
-            nonshuffler_sampler=dict(
-                type="DistributedSampler"
-            ),  # dict(type='DistributedSampler'),
+            nonshuffler_sampler=dict(type="DistributedSampler"),
             runner_type=runner_type,
         )
         for ds in dataset
     ]
+    train_dataloader = data_loaders[0]
 
-    # put model on gpus
-    if distributed:
-        find_unused_parameters = cfg.get("find_unused_parameters", False)
-        # Sets the `find_unused_parameters` parameter in
-        # torch.nn.parallel.DistributedDataParallel
-        model = MMDistributedDataParallel(
-            model.cuda(),
-            device_ids=[torch.cuda.current_device()],
-            broadcast_buffers=False,
-            find_unused_parameters=find_unused_parameters,
+    if not distributed:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = model.to(device)
+        model = LegacyMMDataParallel(model)
+
+    optim_wrapper = _build_optim_wrapper(cfg)
+    param_scheduler = _build_param_scheduler(cfg, max_iters, by_epoch)
+
+    default_hooks = dict()
+    if cfg.get("checkpoint_config", None):
+        default_hooks["checkpoint"] = dict(
+            type="CheckpointHook",
+            interval=cfg.checkpoint_config.get("interval", 1),
+            by_epoch=by_epoch,
+        )
+    if cfg.get("log_config", None):
+        default_hooks["logger"] = dict(
+            type="LoggerHook",
+            interval=cfg.log_config.get("interval", 10),
         )
 
-    else:
-        model = MMDataParallel(
-            model.cuda(cfg.gpu_ids[0]), device_ids=cfg.gpu_ids
-        )
+    log_processor = dict(by_epoch=by_epoch)
 
-    # build runner
-    optimizer = build_optimizer(model, cfg.optimizer)
-
-    if "runner" not in cfg:
-        cfg.runner = {
-            "type": "EpochBasedRunner",
-            "max_epochs": cfg.total_epochs,
-        }
-        warnings.warn(
-            "config is now expected to have a `runner` section, "
-            "please set `runner` in your config.",
-            UserWarning,
-        )
-    else:
-        if "total_epochs" in cfg:
-            assert cfg.total_epochs == cfg.runner.max_epochs
-
-    runner = build_runner(
-        cfg.runner,
-        default_args=dict(
-            model=model,
-            optimizer=optimizer,
-            work_dir=cfg.work_dir,
-            logger=logger,
-            meta=meta,
-        ),
-    )
-
-    # an ugly workaround to make .log and .log.json filenames the same
-    runner.timestamp = timestamp
-
-    # fp16 setting
-    fp16_cfg = cfg.get("fp16", None)
-    if fp16_cfg is not None:
-        optimizer_config = Fp16OptimizerHook(
-            **cfg.optimizer_config, **fp16_cfg, distributed=distributed
-        )
-    elif distributed and "type" not in cfg.optimizer_config:
-        optimizer_config = OptimizerHook(**cfg.optimizer_config)
-    else:
-        optimizer_config = cfg.optimizer_config
-
-    # register hooks
-    runner.register_training_hooks(
-        cfg.lr_config,
-        optimizer_config,
-        cfg.checkpoint_config,
-        cfg.log_config,
-        cfg.get("momentum_config", None),
-    )
-
-    # register profiler hook
-    # trace_config = dict(type='tb_trace', dir_name='work_dir')
-    # profiler_config = dict(on_trace_ready=trace_config)
-    # runner.register_profiler_hook(profiler_config)
-
-    if distributed:
-        if isinstance(runner, EpochBasedRunner):
-            runner.register_hook(DistSamplerSeedHook())
-
-    # register eval hooks
+    eval_hook = None
     if validate:
-        # Support batch_size > 1 in validation
-        val_samples_per_gpu = cfg.data.val.pop("samples_per_gpu", 1)
-        if val_samples_per_gpu > 1:
-            assert False
-            # Replace 'ImageToTensor' to 'DefaultFormatBundle'
-            cfg.data.val.pipeline = replace_ImageToTensor(
-                cfg.data.val.pipeline
-            )
-        val_dataset = custom_build_dataset(cfg.data.val, dict(test_mode=True))
-
+        val_cfg = cfg.data.val
+        val_cfg.test_mode = True
+        val_dataset = custom_build_dataset(val_cfg, dict(test_mode=True))
         val_dataloader = build_dataloader(
             val_dataset,
-            samples_per_gpu=val_samples_per_gpu,
-            workers_per_gpu=cfg.data.workers_per_gpu,
+            samples_per_gpu=cfg.data.val_dataloader.get("samples_per_gpu", 1),
+            workers_per_gpu=workers_per_gpu,
             dist=distributed,
             shuffle=False,
             nonshuffler_sampler=dict(type="DistributedSampler"),
         )
-        eval_cfg = cfg.get("evaluation", {})
-        eval_cfg["by_epoch"] = cfg.runner["type"] != "IterBasedRunner"
+        eval_cfg = cfg.get("evaluation", {}).copy()
         eval_cfg["jsonfile_prefix"] = osp.join(
             "val",
             cfg.work_dir,
             time.ctime().replace(" ", "_").replace(":", "_"),
         )
-        eval_hook = CustomDistEvalHook if distributed else EvalHook
-        runner.register_hook(eval_hook(val_dataloader, **eval_cfg))
+        interval = eval_cfg.pop("interval", 1)
+        dynamic_intervals = eval_cfg.pop("dynamic_intervals", None)
+        start = eval_cfg.pop("start", None)
+        eval_hook = CustomEvalHook(
+            val_dataloader,
+            interval=interval,
+            by_epoch=by_epoch,
+            start=start,
+            dynamic_intervals=dynamic_intervals,
+            eval_kwargs=eval_cfg,
+        )
 
-    # user-defined hooks
-    if cfg.get("custom_hooks", None):
-        custom_hooks = cfg.custom_hooks
-        assert isinstance(
-            custom_hooks, list
-        ), f"custom_hooks expect list type, but got {type(custom_hooks)}"
-        for hook_cfg in cfg.custom_hooks:
-            assert isinstance(hook_cfg, dict), (
-                "Each item in custom_hooks expects dict type, but got "
-                f"{type(hook_cfg)}"
-            )
-            hook_cfg = hook_cfg.copy()
-            priority = hook_cfg.pop("priority", "NORMAL")
-            hook = build_from_cfg(hook_cfg, HOOKS)
-            runner.register_hook(hook, priority=priority)
+    env_cfg = dict(
+        dist_cfg=cfg.get("dist_params", dict(backend="nccl")),
+        mp_cfg=dict(mp_start_method="fork", opencv_num_threads=0),
+    )
 
-    if cfg.resume_from:
+    launcher = cfg.get("launcher", "none")
+    if distributed:
+        model = LegacyMMDistributedDataParallel(
+            model.cuda(),
+            device_ids=[torch.cuda.current_device()],
+            broadcast_buffers=False,
+            find_unused_parameters=cfg.get("find_unused_parameters", False),
+        )
+    runner = Runner(
+        model=model,
+        work_dir=cfg.work_dir,
+        train_dataloader=train_dataloader,
+        train_cfg=train_cfg,
+        optim_wrapper=optim_wrapper,
+        param_scheduler=param_scheduler,
+        default_hooks=default_hooks,
+        custom_hooks=[eval_hook] if eval_hook is not None else None,
+        log_processor=log_processor,
+        env_cfg=env_cfg,
+        launcher=launcher if distributed else "none",
+        load_from=cfg.get("load_from", None),
+        resume=cfg.get("resume_from", None) is not None,
+        randomness=dict(seed=cfg.seed, deterministic=cfg.get("deterministic", False)),
+    )
+
+    if cfg.get("resume_from", None):
         runner.resume(cfg.resume_from)
-    elif cfg.load_from:
-        runner.load_checkpoint(cfg.load_from)
-    runner.run(data_loaders, cfg.workflow)
+    runner.train()

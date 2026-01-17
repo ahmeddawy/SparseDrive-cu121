@@ -3,10 +3,14 @@ import numpy as np
 import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 
-from mmdet.core.bbox.builder import (BBOX_SAMPLERS, BBOX_ASSIGNERS)
-from mmdet.core.bbox.match_costs import build_match_cost
-from mmdet.core import (build_assigner, build_sampler)
-from mmdet.core.bbox.assigners import (AssignResult, BaseAssigner)
+from mmdet.models.task_modules import (
+    BBOX_ASSIGNERS,
+    BBOX_SAMPLERS,
+    build_assigner,
+    build_match_cost,
+    build_sampler,
+)
+from mmdet.models.task_modules.assigners import AssignResult, BaseAssigner
 
 from ..base_target import BaseTargetWithDenoising
 
