@@ -90,6 +90,13 @@ We found that some collision cases were not taken into consideration in our prev
 ## Quick Start
 [Quick Start](docs/quick_start.md)
 
+## CUDA 12.1 / H100 Setup
+For a clean environment that matches the working cu121 stack, follow:
+- `docs/ENV_SETUP_CU121.md`
+
+This includes the exact steps to build the env, compile ops, and run
+`scripts/test.sh` and `scripts/train.sh` on H100/RTX6000/RTX4090.
+
 ## Citation
 If you find SparseDrive useful in your research or applications, please consider giving us a star &#127775; and citing it by the following BibTeX entry.
 ```
@@ -108,4 +115,3 @@ If you find SparseDrive useful in your research or applications, please consider
 - [StreamPETR](https://github.com/exiawsh/StreamPETR)
 - [StreamMapNet](https://github.com/yuantianyuan01/StreamMapNet)
 - [mmdet3d](https://github.com/open-mmlab/mmdetection3d)
-
