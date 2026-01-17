@@ -16,6 +16,7 @@ Tested on:
 - NVIDIA driver that supports CUDA 12.1+
 - Conda installed and working
 - Repo path: `/home/oem/Practice/sparsedrive_law/sparsedrive_cu126`
+- Optional: exact package snapshot in `docs/ENV_SNAPSHOT.md`
 
 ## 1) Create and activate the env
 
