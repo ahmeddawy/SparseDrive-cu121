@@ -41,3 +41,11 @@ export CPATH="$CUDA_HOME/targets/x86_64-linux/include:$CPATH"
 export LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib:$LIBRARY_PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib:$LD_LIBRARY_PATH"
 ```
+
+## Reproducibility caveats
+
+- The snapshot freezes Python package versions, but source-built pieces
+  (`flash-attn` and `projects/mmdet3d_plugin/ops`) still depend on the
+  local CUDA toolkit, compiler, and driver.
+- Training is not bit-exact across runs or machines because some CUDA
+  kernels are non-deterministic by design.
