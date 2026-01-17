@@ -3,6 +3,8 @@
 This document captures the exact steps used to reproduce the working
 CUDA 12.1 + PyTorch 2.4 environment for this repo. It avoids touching
 system CUDA/NVCC and uses a Conda-provided toolchain inside the env.
+OpenMMLab is installed via pip wheels (not built from source); only
+`flash-attn` and the repo's custom CUDA ops are built from source.
 
 Tested on:
 - Python 3.10
@@ -31,7 +33,7 @@ python -m pip install \
   --index-url https://download.pytorch.org/whl/cu121
 ```
 
-## 3) Install OpenMMLab core stack
+## 3) Install OpenMMLab core stack (pip wheels)
 
 ```bash
 python -m pip install mmengine==0.10.4
@@ -40,7 +42,7 @@ python -m pip install mmdet==3.3.0
 python -m pip install mmdet3d==1.4.0
 ```
 
-## 4) Install repo Python deps
+## 4) Install repo Python deps (manual pins used in this run)
 
 NuScenes devkit 1.1.10 requires matplotlib<=3.5.2 and shapely<=1.8.5.
 
@@ -57,7 +59,8 @@ python -m pip install \
 
 ## 5) CUDA toolchain inside the env (no system CUDA usage)
 
-If `nvcc` is not inside the env, install a CUDA toolkit package:
+We build CUDA code using the toolchain inside the conda env. If `nvcc`
+is missing from `$CONDA_PREFIX/bin`, install the toolkit first:
 
 ```bash
 conda install -c nvidia cuda-toolkit=12.1 -y
@@ -74,18 +77,28 @@ export LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib:$LIBRARY_PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib:$LD_LIBRARY_PATH"
 ```
 
-## 6) Build flash-attn
+## 6) Build flash-attn (source)
 
 Set arch list for H100 (sm_90) and RTX 6000 Ada (sm_89):
 
 ```bash
 export TORCH_CUDA_ARCH_LIST="9.0;8.9"
+export CUDA_HOME="$CONDA_PREFIX"
+export PATH="$CUDA_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
+python -m pip install psutil==5.9.8
 python -m pip install flash-attn==2.6.3 --no-build-isolation
 ```
 
-## 7) Build custom CUDA ops
+## 7) Build custom CUDA ops (source)
 
 ```bash
+export CUDA_HOME="$CONDA_PREFIX"
+export CUDACXX="$CONDA_PREFIX/bin/nvcc"
+export PATH="$CUDA_HOME/bin:$PATH"
+export CPATH="$CUDA_HOME/targets/x86_64-linux/include:$CPATH"
+export LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib:$LIBRARY_PATH"
+export LD_LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib:$LD_LIBRARY_PATH"
 cd /home/oem/Practice/sparsedrive_law/sparsedrive_cu126/projects/mmdet3d_plugin/ops
 python -m pip install -e . --no-build-isolation
 cd -
