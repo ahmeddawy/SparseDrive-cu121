@@ -80,10 +80,11 @@ export LD_LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib:$LD_LIBRARY_PATH"
 
 ## 6) Build flash-attn (source)
 
-Set arch list for H100 (sm_90) and RTX 6000 Ada (sm_89):
+Set arch list for H100 (sm_90) and RTX 6000 Pro/Ada (sm_89).
+If you also target RTX A6000 (Ampere, sm_86), include 8.6:
 
 ```bash
-export TORCH_CUDA_ARCH_LIST="9.0;8.9"
+export TORCH_CUDA_ARCH_LIST="9.0;8.9;8.6"
 export CUDA_HOME="$CONDA_PREFIX"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
