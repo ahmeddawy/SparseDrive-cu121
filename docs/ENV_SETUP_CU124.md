@@ -130,7 +130,20 @@ linker if needed:
 export CUDA_HOME="$CONDA_PREFIX"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
+
+# Fix: keep tmp + cache on same filesystem
+export PIP_CACHE_DIR=$HOME/.cache/pip
+export TMPDIR=$PIP_CACHE_DIR/tmp
+mkdir -p "$TMPDIR"
 python -m pip install flash-attn==2.6.3 --no-build-isolation
+```
+
+Or:
+
+```bash
+export TMPDIR=$HOME/pip-tmp
+mkdir -p $TMPDIR
+python -m pip install flash-attn==2.6.3 --no-build-isolation --no-cache-dir
 ```
 
 ## 7) Build custom CUDA ops (source)
