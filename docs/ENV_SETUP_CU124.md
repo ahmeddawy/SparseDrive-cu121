@@ -22,7 +22,9 @@ Tested on:
 ## 1) Create and activate the env
 
 ```bash
-conda create -n sparsedrive_cu124 python=3.10 -y
+conda create -n sparsedrive_cu124 \
+  python=3.10 gcc_linux-64=12 gxx_linux-64=12 cuda-toolkit=12.4 \
+  -c conda-forge -c nvidia -y
 conda activate sparsedrive_cu124
 ```
 
@@ -37,7 +39,8 @@ python -m pip install \
 
 ## 3) CUDA toolchain + build env (required before any CUDA builds)
 
-If `nvcc` is missing from `$CONDA_PREFIX/bin`, install the toolkit:
+If you did not install the CUDA toolkit during env creation, or `nvcc`
+is missing from `$CONDA_PREFIX/bin`, install it now:
 
 ```bash
 conda install -c nvidia cuda-toolkit=12.4 -y
@@ -116,8 +119,8 @@ python -m pip install \
   pillow==10.3.0 einops==0.7.0 pycocotools==2.0.7 \
   urllib3==1.26.18 psutil==5.9.8 terminaltables==3.1.10
 
-# ensure no conda OpenCV is installed, then pin opencv-python
-conda remove -y opencv py-opencv
+# ensure any existing OpenCV is removed, then pin opencv-python
+python -m pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python
 python -m pip install --no-deps --force-reinstall opencv-python==4.8.1.78
 ```
 
@@ -156,6 +159,18 @@ export CPATH="$CUDA_HOME/targets/x86_64-linux/include:$CPATH"
 export LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib:$LIBRARY_PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib:$LD_LIBRARY_PATH"
 cd /home/oem/Practice/sparsedrive_law/sparsedrive_cu126/projects/mmdet3d_plugin/ops
+python -m pip install . --no-build-isolation
+cd -
+```
+
+Troubleshooting:
+- If you see `ImportError: /lib64/libc.so.6: version 'GLIBC_2.32' not found`,
+  the `.so` was built on a newer OS/glibc than your target machine. Delete
+  the old build artifacts and rebuild the ops on the target machine:
+
+```bash
+cd /home/oem/Practice/sparsedrive_law/sparsedrive_cu126/projects/mmdet3d_plugin/ops
+rm -rf build dist *.egg-info *.so
 python -m pip install . --no-build-isolation
 cd -
 ```
