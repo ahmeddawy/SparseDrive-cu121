@@ -41,6 +41,11 @@ class SparseDriveHead(BaseModule):
         self,
         feature_maps: Union[torch.Tensor, List],
         metas: dict,
+        feature_maps_next: Union[torch.Tensor, List] = None,
+        feature_maps_raw: Union[torch.Tensor, List] = None,
+        feature_maps_next_raw: Union[torch.Tensor, List] = None,
+        projection_mat: torch.Tensor = None,
+        projection_mat_sequence: Union[torch.Tensor, List] = None,
     ):
         if self.task_config['with_det']:
             det_output = self.det_head(feature_maps, metas)
@@ -61,6 +66,11 @@ class SparseDriveHead(BaseModule):
                 self.det_head.anchor_encoder,
                 self.det_head.instance_bank.mask,
                 self.det_head.instance_bank.anchor_handler,
+                feature_maps_next=feature_maps_next,
+                feature_maps_raw=feature_maps_raw,
+                feature_maps_next_raw=feature_maps_next_raw,
+                projection_mat=projection_mat,
+                projection_mat_sequence=projection_mat_sequence,
             )
         else:
             motion_output, planning_output = None, None

@@ -30,6 +30,7 @@ from projects.mmdet3d_plugin.core.box3d import *
 from ..attention import gen_sineembed_for_position
 from ..blocks import linear_relu_ln
 from ..instance_bank import topk
+from .world_model import WorldModel
 
 
 @HEADS.register_module()
@@ -63,12 +64,18 @@ class MotionPlanningHead(BaseModule):
         planning_decoder=None,
         num_det=50,
         num_map=10,
+        with_world_model=False,
+        world_model_cfg=None,
+        world_model_loss_weight=0.2,
     ):
         super(MotionPlanningHead, self).__init__()
         self.fut_ts = fut_ts
         self.fut_mode = fut_mode
         self.ego_fut_ts = ego_fut_ts
         self.ego_fut_mode = ego_fut_mode
+
+        # World model loss weight
+        self.world_model_loss_weight = world_model_loss_weight
 
         self.decouple_attn = decouple_attn
         self.operation_order = operation_order
@@ -141,6 +148,10 @@ class MotionPlanningHead(BaseModule):
 
         self.num_det = num_det
         self.num_map = num_map
+
+        self.with_world_model = with_world_model
+        if self.with_world_model:
+            self.world_model = WorldModel(**world_model_cfg)
 
     def init_weights(self):
         for i, op in enumerate(self.operation_order):
@@ -215,6 +226,11 @@ class MotionPlanningHead(BaseModule):
         anchor_encoder,
         mask,
         anchor_handler,
+        feature_maps_next=None,
+        feature_maps_raw=None,
+        feature_maps_next_raw=None,
+        projection_mat=None,
+        projection_mat_sequence=None,
     ):   
         # =========== det/map feature/anchor ===========
         instance_feature = det_output["instance_feature"]
@@ -337,6 +353,81 @@ class MotionPlanningHead(BaseModule):
         self.instance_queue.cache_motion(instance_feature[:, :num_anchor], det_output, metas)
         self.instance_queue.cache_planning(instance_feature[:, num_anchor:], plan_status)
 
+        # =========== World Model Prediction ===========
+        wm_pred = None
+        wm_target = None
+        wm_pred_list = []
+        wm_target_list = []
+
+        if (
+            self.with_world_model
+            and feature_maps_next_raw is not None
+            and feature_maps_raw is not None
+            and projection_mat is not None
+            and projection_mat_sequence is not None
+        ):
+            # World Model expects (B, V, C, H, W) features from the last level
+            current_feat = feature_maps_raw[-1]
+
+            # Extract current scene state
+            current_scene_state = self.world_model.extract_scene_state(
+                current_feat, metas, projection_mat
+            )
+
+            # Build action from planner prediction (command + best mode)
+            plan_reg = planning_prediction[-1]
+            bs = plan_reg.shape[0]
+            bs_indices = torch.arange(bs, device=plan_reg.device)
+            if "gt_ego_fut_cmd" in metas:
+                cmd = metas["gt_ego_fut_cmd"].argmax(dim=-1)
+            else:
+                cmd = torch.zeros(bs, dtype=torch.long, device=plan_reg.device)
+            plan_reg = plan_reg.reshape(bs, 3, self.ego_fut_mode, self.ego_fut_ts, 2)
+            plan_reg_cmd = plan_reg[bs_indices, cmd]
+            plan_cls = planning_classification[-1]
+            plan_cls = plan_cls.reshape(bs, 3, self.ego_fut_mode)
+            plan_cls_cmd = plan_cls[bs_indices, cmd]
+            best_mode_idx = plan_cls_cmd.argmax(dim=-1)
+            action = plan_reg_cmd[bs_indices, best_mode_idx]
+            action_flat = action.reshape(bs, -1)
+
+            # Pad/truncate action to match expected dim
+            action_dim = self.world_model.action_dim
+            if action_flat.shape[1] > action_dim:
+                action_flat = action_flat[:, :action_dim]
+            elif action_flat.shape[1] < action_dim:
+                pad = torch.zeros(
+                    action_flat.shape[0],
+                    action_dim - action_flat.shape[1],
+                    device=action_flat.device,
+                    dtype=action_flat.dtype,
+                )
+                action_flat = torch.cat([action_flat, pad], dim=1)
+
+            # Multi-step rollout over available future frames
+            for step_idx, next_feat in enumerate(feature_maps_next_raw):
+                target_proj = None
+                if (
+                    isinstance(projection_mat_sequence, list)
+                    and len(projection_mat_sequence) > step_idx + 1
+                ):
+                    target_proj = projection_mat_sequence[step_idx + 1]
+                elif projection_mat_sequence is not None:
+                    target_proj = projection_mat_sequence
+
+                wm_pred_step = self.world_model.forward_prediction(
+                    current_scene_state, action_flat
+                )
+                wm_target_step = self.world_model.extract_scene_state(
+                    next_feat, metas, target_proj
+                ).detach()
+
+                wm_pred_list.append(wm_pred_step)
+                wm_target_list.append(wm_target_step)
+
+                # Feed predicted latent forward for next step
+                current_scene_state = wm_pred_step.detach()
+
         motion_output = {
             "classification": motion_classification,
             "prediction": motion_prediction,
@@ -349,6 +440,8 @@ class MotionPlanningHead(BaseModule):
             "status": planning_status,
             "period": self.instance_queue.ego_period,
             "anchor_queue": self.instance_queue.ego_anchor_queue,
+            "wm_pred": wm_pred_list if len(wm_pred_list) > 0 else wm_pred,
+            "wm_target": wm_target_list if len(wm_target_list) > 0 else wm_target,
         }
         return motion_output, planning_output
     
@@ -363,6 +456,21 @@ class MotionPlanningHead(BaseModule):
         loss.update(motion_loss)
         planning_loss = self.loss_planning(planning_model_outs, data)
         loss.update(planning_loss)
+
+        if self.with_world_model:
+            wm_pred = planning_model_outs.get("wm_pred")
+            wm_target = planning_model_outs.get("wm_target")
+            if wm_pred is not None and wm_target is not None:
+                if isinstance(wm_pred, list) and isinstance(wm_target, list):
+                    wm_losses = []
+                    for p, t in zip(wm_pred, wm_target):
+                        wm_losses.append(self.world_model.loss(p, t))
+                    if len(wm_losses) > 0:
+                        wm_loss = sum(wm_losses) / len(wm_losses)
+                        loss["loss_world_model"] = wm_loss * self.world_model_loss_weight
+                else:
+                    wm_loss = self.world_model.loss(wm_pred, wm_target)
+                    loss["loss_world_model"] = wm_loss * self.world_model_loss_weight
         return loss
 
     @force_fp32(apply_to=("model_outs"))

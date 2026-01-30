@@ -689,7 +689,8 @@ optimizer = dict(
             "img_backbone": dict(lr_mult=0.05),  # More conservative
             "head.motion_plan_head": dict(lr_mult=0.08),  # More conservative
             "head.det_head": dict(lr_mult=0.1),  # More conservative
-            "head.map_head": dict(lr_mult=0.1)
+            "head.map_head": dict(lr_mult=0.1),
+            "world_model": dict(lr_mult=3.0),  # if present
         }),
 )
 
